@@ -1,60 +1,26 @@
 import { useEffect, useState } from 'react';
 import supabase from './supabase';
+import { useAuth } from './AuthContext';
+import { UserMenu } from './AuthComponents';
 
 import './style.css';
-
-const initialFacts = [
-  {
-    id: 1,
-    text: 'React is being developed by Meta (formerly facebook)',
-    source: 'https://opensource.fb.com/',
-    category: 'technology',
-    votesInteresting: 24,
-    votesMindblowing: 9,
-    votesFalse: 4,
-    createdIn: 2021,
-  },
-  {
-    id: 2,
-    text: 'Millennial dads spend 3 times as much time with their kids than their fathers spent with them. In 1982, 43% of fathers had never changed a diaper. Today, that number is down to 3%',
-    source:
-      'https://www.mother.ly/parenting/millennial-dads-spend-more-time-with-their-kids',
-    category: 'society',
-    votesInteresting: 11,
-    votesMindblowing: 2,
-    votesFalse: 0,
-    createdIn: 2019,
-  },
-  {
-    id: 3,
-    text: 'Lisbon is the capital of Portugal',
-    source: 'https://en.wikipedia.org/wiki/Lisbon',
-    category: 'society',
-    votesInteresting: 8,
-    votesMindblowing: 3,
-    votesFalse: 1,
-    createdIn: 2015,
-  },
-];
-
-function Counter() {
-  const [count, setCount] = useState(0);
-
-  return (
-    <div>
-      <span style={{ fontSize: '40px' }}>{count}</span>
-      <button className='btn btn-large' onClick={() => setCount((c) => c + 1)}>
-        +1
-      </button>
-    </div>
-  );
-}
 
 function App() {
   const [showForm, setShowForm] = useState(false);
   const [facts, setFacts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentCategory, setCurrentCategory] = useState('all');
+  const [theme, setTheme] = useState(() => {
+    // Check for saved theme preference, default to 'dark'
+    return localStorage.getItem('theme') || 'dark';
+  });
+  const { user } = useAuth();
+
+  // Apply theme when it changes
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   useEffect(
     function () {
@@ -79,9 +45,18 @@ function App() {
     [currentCategory]
   );
 
+  const toggleTheme = () => {
+    setTheme(theme === 'dark' ? 'light' : 'dark');
+  };
+
   return (
     <>
-      <Header showForm={showForm} setShowForm={setShowForm} />
+      <Header 
+        showForm={showForm} 
+        setShowForm={setShowForm} 
+        theme={theme} 
+        toggleTheme={toggleTheme}
+      />
       {showForm ? (
         <NewFactForm setFacts={setFacts} setShowForm={setShowForm} />
       ) : null}
@@ -100,11 +75,17 @@ function App() {
 }
 
 function Loader() {
-  return <p className='message'>Loading...</p>;
+  return (
+    <div className='loader-container'>
+      <div className='loader'></div>
+      <p className='message'>Loading facts...</p>
+    </div>
+  );
 }
 
-function Header({ showForm, setShowForm }) {
+function Header({ showForm, setShowForm, theme, toggleTheme }) {
   const appTitle = 'Today I Learned';
+  const { user } = useAuth();
 
   return (
     <header className='header'>
@@ -112,14 +93,37 @@ function Header({ showForm, setShowForm }) {
         <img src='logo.png' height='68' width='68' alt='Today I Learned Logo' />
         <h1>{appTitle}</h1>
       </div>
-
-      <button
-        className='btn btn-large btn-open'
-        onClick={() => setShowForm((show) => !show)}
-      >
-        {showForm ? 'Close' : 'Share a fact'}
-      </button>
+      
+      <div className="header-right">
+        <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+        <UserMenu />
+        
+        <button
+          className='btn btn-large btn-open'
+          onClick={() => setShowForm((show) => !show)}
+        >
+          {showForm ? 'Close' : 'Share a fact'}
+        </button>
+      </div>
     </header>
+  );
+}
+
+function ThemeToggle({ theme, toggleTheme }) {
+  return (
+    <div className="theme-switch-wrapper">
+      <button 
+        className="theme-switch" 
+        onClick={toggleTheme}
+        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? (
+          <span className="theme-icon">☀️</span>
+        ) : (
+          <span className="theme-icon">🌙</span>
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -146,48 +150,63 @@ function isValidHttpUrl(string) {
 
 function NewFactForm({ setFacts, setShowForm }) {
   const [text, setText] = useState('');
-  // Fixed in a video text overlay
   const [source, setSource] = useState('');
   const [category, setCategory] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const textLength = text.length;
+  const { user } = useAuth();
 
   async function handleSubmit(e) {
-    // 1. Prevent browser reload
     e.preventDefault();
-    console.log(text, source, category);
+    
+    // Check if user is logged in
+    if (!user) {
+      alert('Please log in to share a fact');
+      return;
+    }
 
-    // 2. Check if data is valid. If so, create a new fact
     if (text && isValidHttpUrl(source) && category && textLength <= 200) {
-      // 3. Create a new fact object
-      // const newFact = {
-      //   id: Math.round(Math.random() * 10000000),
-      //   text,
-      //   source,
-      //   category,
-      //   votesInteresting: 0,
-      //   votesMindblowing: 0,
-      //   votesFalse: 0,
-      //   createdIn: new Date().getFullYear(),
-      // };
-
-      // 3. Upload fact to Supabase and receive the new fact object
       setIsUploading(true);
+      
+      // First, check if a fact with the same text already exists
+      const { data: existingFacts, error: checkError } = await supabase
+        .from('facts')
+        .select('id')
+        .eq('text', text.trim())
+        .limit(1);
+      
+      if (checkError) {
+        alert('Error checking for duplicate facts');
+        setIsUploading(false);
+        return;
+      }
+      
+      // If a fact with the same text exists, show an alert and don't insert
+      if (existingFacts && existingFacts.length > 0) {
+        alert('This fact already exists in the database!');
+        setIsUploading(false);
+        return;
+      }
+      
+      // If no duplicate found, insert the new fact
       const { data: newFact, error } = await supabase
         .from('facts')
-        .insert([{ text, source, category }])
+        .insert([{ 
+          text: text.trim(), 
+          source, 
+          category,
+          user_id: user.id // Associate fact with user
+        }])
         .select();
+      
       setIsUploading(false);
 
-      // 4. Add the new fact to the UI: add the fact to state
       if (!error) setFacts((facts) => [newFact[0], ...facts]);
+      else alert('There was a problem adding your fact');
 
-      // 5. Reset input fields
       setText('');
       setSource('');
       setCategory('');
-
-      // 6. Close the form
       setShowForm(false);
     }
   }
@@ -201,7 +220,9 @@ function NewFactForm({ setFacts, setShowForm }) {
         onChange={(e) => setText(e.target.value)}
         disabled={isUploading}
       />
-      <span>{200 - textLength}</span>
+      <span className={textLength > 180 ? 'text-count warning' : 'text-count'}>
+        {200 - textLength}
+      </span>
       <input
         value={source}
         type='text'
@@ -222,20 +243,27 @@ function NewFactForm({ setFacts, setShowForm }) {
         ))}
       </select>
       <button className='btn btn-large' disabled={isUploading}>
-        Post
+        {isUploading ? 'Posting...' : 'Post'}
       </button>
     </form>
   );
 }
 
 function CategoryFilter({ setCurrentCategory }) {
+  const [activeCategory, setActiveCategory] = useState('all');
+
+  const handleCategoryClick = (category) => {
+    setActiveCategory(category);
+    setCurrentCategory(category);
+  };
+
   return (
     <aside>
-      <ul>
+      <ul className="category-list">
         <li className='category'>
           <button
-            className='btn btn-all-categories'
-            onClick={() => setCurrentCategory('all')}
+            className={`btn btn-all-categories ${activeCategory === 'all' ? 'active' : ''}`}
+            onClick={() => handleCategoryClick('all')}
           >
             All
           </button>
@@ -244,9 +272,9 @@ function CategoryFilter({ setCurrentCategory }) {
         {CATEGORIES.map((cat) => (
           <li key={cat.name} className='category'>
             <button
-              className='btn btn-category'
+              className={`btn btn-category ${activeCategory === cat.name ? 'active' : ''}`}
               style={{ backgroundColor: cat.color }}
-              onClick={() => setCurrentCategory(cat.name)}
+              onClick={() => handleCategoryClick(cat.name)}
             >
               {cat.name}
             </button>
@@ -266,35 +294,177 @@ function FactList({ facts, setFacts }) {
     );
 
   return (
-    <section>
+    <section className="facts-section">
       <ul className='facts-list'>
         {facts.map((fact) => (
           <Fact key={fact.id} fact={fact} setFacts={setFacts} />
         ))}
       </ul>
-      <p>There are {facts.length} facts in the database. Add your own!</p>
+      <p className="facts-count">There are {facts.length} facts in the database. Add your own!</p>
     </section>
   );
 }
 
 function Fact({ fact, setFacts }) {
   const [isUpdating, setIsUpdating] = useState(false);
+  const { user } = useAuth();
+  const [userVotes, setUserVotes] = useState(null);
   const isDisputed =
     fact.votesInteresting + fact.votesMindblowing < fact.votesFalse;
 
-  async function handleVote(columnName) {
-    setIsUpdating(true);
-    const { data: updatedFact, error } = await supabase
-      .from('facts')
-      .update({ [columnName]: fact[columnName] + 1 })
-      .eq('id', fact.id)
-      .select();
-    setIsUpdating(false);
+  // Check if user has voted on this fact
+  useEffect(() => {
+    async function checkUserVote() {
+      if (!user) {
+        setUserVotes(null);
+        return;
+      }
+      
+      const { data, error } = await supabase
+        .from('votes')
+        .select('vote_type')
+        .eq('fact_id', fact.id)
+        .eq('user_id', user.id)
+        .single();
+      
+      if (!error && data) {
+        setUserVotes(data.vote_type);
+      } else {
+        setUserVotes(null);
+      }
+    }
+    
+    checkUserVote();
+  }, [fact.id, user]);
 
-    if (!error)
-      setFacts((facts) =>
-        facts.map((f) => (f.id === fact.id ? updatedFact[0] : f))
-      );
+  async function handleVote(voteType) {
+    if (!user) {
+      alert('Please log in to vote');
+      return;
+    }
+
+    setIsUpdating(true);
+    
+    try {
+      // If user already voted
+      if (userVotes) {
+        // If clicking the same vote type, remove the vote
+        if (userVotes === voteType) {
+          // Remove user vote from votes table
+          const { error: deleteError } = await supabase
+            .from('votes')
+            .delete()
+            .eq('fact_id', fact.id)
+            .eq('user_id', user.id);
+            
+          if (deleteError) throw deleteError;
+          
+          // Decrement vote count
+          const { data: updatedFact, error: updateError } = await supabase
+            .from('facts')
+            .update({ [voteType]: fact[voteType] - 1 })
+            .eq('id', fact.id)
+            .select();
+            
+          if (updateError) throw updateError;
+            
+          if (updatedFact) {
+            setFacts((facts) =>
+              facts.map((f) => (f.id === fact.id ? updatedFact[0] : f))
+            );
+            setUserVotes(null);
+          }
+        } 
+        // If clicking different vote type, change the vote
+        else {
+          // Update user vote in votes table
+          const { error: updateVoteError } = await supabase
+            .from('votes')
+            .update({ vote_type: voteType })
+            .eq('fact_id', fact.id)
+            .eq('user_id', user.id);
+            
+          if (updateVoteError) throw updateVoteError;
+          
+          // Decrement old vote type and increment new vote type
+          const { data: updatedFact, error: updateFactError } = await supabase
+            .from('facts')
+            .update({ 
+              [userVotes]: fact[userVotes] - 1,
+              [voteType]: fact[voteType] + 1 
+            })
+            .eq('id', fact.id)
+            .select();
+            
+          if (updateFactError) throw updateFactError;
+            
+          if (updatedFact) {
+            setFacts((facts) =>
+              facts.map((f) => (f.id === fact.id ? updatedFact[0] : f))
+            );
+            setUserVotes(voteType);
+          }
+        }
+      } 
+      // If user hasn't voted yet
+      else {
+        // Insert new vote in votes table
+        const { error: insertError } = await supabase
+          .from('votes')
+          .insert([{ 
+            fact_id: fact.id,
+            user_id: user.id,
+            vote_type: voteType
+          }])
+          .select();
+          
+        if (insertError) {
+          // If error is due to conflict, it means user already voted
+          // This is a safeguard in case our UI state gets out of sync
+          console.error('Insert vote error:', insertError);
+          if (insertError.code === '23505') { // Unique violation error
+            alert('You have already voted on this fact. Please refresh the page.');
+            setIsUpdating(false);
+            return;
+          }
+          throw insertError;
+        }
+        
+        // Increment vote count
+        const { data: updatedFact, error: updateError } = await supabase
+          .from('facts')
+          .update({ [voteType]: fact[voteType] + 1 })
+          .eq('id', fact.id)
+          .select();
+          
+        if (updateError) throw updateError;
+          
+        if (updatedFact) {
+          setFacts((facts) =>
+            facts.map((f) => (f.id === fact.id ? updatedFact[0] : f))
+          );
+          setUserVotes(voteType);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling vote:', error);
+      alert('There was a problem with your vote: ' + (error.message || 'Unknown error'));
+      // Refresh the user's vote state to be safe
+      const { data } = await supabase
+        .from('votes')
+        .select('vote_type')
+        .eq('fact_id', fact.id)
+        .eq('user_id', user.id)
+        .single();
+        
+      if (data) {
+        setUserVotes(data.vote_type);
+      } else {
+        setUserVotes(null);
+      }
+    }
+    
+    setIsUpdating(false);
   }
 
   return (
@@ -302,7 +472,7 @@ function Fact({ fact, setFacts }) {
       <p>
         {isDisputed ? <span className='disputed'>[⛔️ DISPUTED]</span> : null}
         {fact.text}
-        <a className='source' href={fact.source} target='_blank'>
+        <a className='source' href={fact.source} target='_blank' rel="noopener noreferrer">
           (Source)
         </a>
       </p>
@@ -310,26 +480,35 @@ function Fact({ fact, setFacts }) {
         className='tag'
         style={{
           backgroundColor: CATEGORIES.find((cat) => cat.name === fact.category)
-            .color,
+            ?.color,
         }}
       >
         {fact.category}
       </span>
       <div className='vote-buttons'>
         <button
+          className={`vote-btn ${userVotes === 'votesInteresting' ? 'voted' : ''}`}
           onClick={() => handleVote('votesInteresting')}
           disabled={isUpdating}
+          title="Interesting"
         >
-          👍 {fact.votesInteresting}
+          👍 {fact.votesInteresting || 0}
         </button>
         <button
+          className={`vote-btn ${userVotes === 'votesMindblowing' ? 'voted' : ''}`}
           onClick={() => handleVote('votesMindblowing')}
           disabled={isUpdating}
+          title="Mind Blowing"
         >
-          🤯 {fact.votesMindblowing}
+          🤯 {fact.votesMindblowing || 0}
         </button>
-        <button onClick={() => handleVote('votesFalse')} disabled={isUpdating}>
-          ⛔️ {fact.votesFalse}
+        <button 
+          className={`vote-btn ${userVotes === 'votesFalse' ? 'voted' : ''}`}
+          onClick={() => handleVote('votesFalse')} 
+          disabled={isUpdating}
+          title="Not True"
+        >
+          ⛔️ {fact.votesFalse || 0}
         </button>
       </div>
     </li>
@@ -337,4 +516,3 @@ function Fact({ fact, setFacts }) {
 }
 
 export default App;
-
